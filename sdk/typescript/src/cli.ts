@@ -175,6 +175,10 @@ import {
   savedScanWorkbench,
 } from "./saved-scan-bootstrap.js";
 import { deduplicateScanInternal } from "./deduplication/scan.js";
+import {
+  createSeverityDiagnostics,
+  severityDiagnosticsEnabled,
+} from "./classify-severity-diagnostics.js";
 import { runHostRecordsProtocol } from "./host-records-protocol.js";
 import { runHostedScanProtocol } from "./hosted-scan-protocol.js";
 import { runHostedRemediationProtocol } from "./hosted-remediation-protocol.js";
@@ -4668,7 +4672,7 @@ export async function main(
         },
       ],
       description:
-        "Read all AWS Continuum issues or collect one finding with its repository's patches.",
+        "Read all AWS Continuum issues or collect one finding with its matching validation evidence and patches.",
       hint: "Requires AWS CLI v2.38.5 or later installed outside the checkout. Bulk collection requires exactly one Git repository and allows S3 sources. For one finding, pass --finding-id and --source-root. The CLI checks for one Git repository and no S3 sources when --repository-name is omitted. Save --format json output for publish findings --provider continuum.",
       destructive: false,
       args: z.object({ environmentId: continuumEnvironmentId }),
@@ -5980,7 +5984,7 @@ export async function main(
           .boolean()
           .default(false)
           .describe(
-            "Classify canonical records through host-provided reviews over version 1 JSON-RPC; accepts --runs.",
+            "Classify canonical records through host-provided reviews over version 1 JSON-RPC. Accepts --runs. Hosts can enable CLI diagnostics with the Node condition codex-security-records-logs-v1.",
           ),
         reprocess: z
           .boolean()
@@ -8202,6 +8206,19 @@ export async function main(
       },
     });
 
+  if (
+    environmentEntry(
+      dependencies.environment,
+      "CODEX_SECURITY_ENABLE_DEPENDENCY_EXPLOITABILITY",
+    ) === "1"
+  ) {
+    cli.command(
+      Cli.create("exploitability", {
+        description: "Investigate dependency vulnerabilities in a repository.",
+      }),
+    );
+  }
+
   if (completion.success) {
     await writeCliOutput(
       output,
@@ -8518,6 +8535,11 @@ export async function main(
           ? await runHostRecordsProtocol(recordsCommand, input, output, {
               signal: controller.signal,
               classificationRuns,
+              diagnostics:
+                recordsCommand === "classify-severity" &&
+                severityDiagnosticsEnabled()
+                  ? createSeverityDiagnostics(() => dependencies.now())
+                  : undefined,
             })
           : remediationOperation !== undefined
             ? await runHostedRemediationProtocol(
